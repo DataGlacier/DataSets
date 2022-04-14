@@ -7,8 +7,7 @@ inner = pd.merge(df1, df2)
 
 new_dataframe = pd.merge(inner, df3)
 
-
-
+new_dataframe_out = new_dataframe.drop(["0"], axis = 1)
 
 
 
