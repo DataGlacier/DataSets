@@ -6,9 +6,11 @@ Created on Fri Apr 29 07:11:15 2022
 @author: allenayodeji
 """
 
+import pickle
 import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
 import xlrd
 
 df = pd.read_csv('data_cleaning.csv')
@@ -31,73 +33,75 @@ profit = (df.Price_Charged - df.Cost_of_Trip)
 df['Profit_of_Cabs'] = profit.apply(lambda x: x if x>=0 else 0)
    
 
+# saving a holdout test set of 100 rows
+holdout = df.iloc[-3000:, :]
+# saving as a json to test later
+holdout.to_json("holdout_test.json", orient="records")
 
-# choose relevant columns
-df.columns
+# the non-holdout data is train data
+train = df.iloc[:3000, :]
 
-df_model = df[['Company', 'City', 'Date', 'Profit_of_Cabs',]]
-# get dummy data
-df_dum = pd.get_dummies(df_model)
-# train test split
-from sklearn.model_selection import train_test_split
-
-X = df_dum.drop('Profit_of_Cabs', axis =1)
-y = df_dum.Profit_of_Cabs.values
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# multiple linear regression 
-import statsmodels.api as sm
-X_sm =  X = sm.add_constant(X)
-model = sm.OLS(y,X_sm)
-model.fit().summary()
-
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import cross_val_score
-
-lm = LinearRegression()
-lm.fit(X_train, y_train)
-
-np.mean(cross_val_score(lm, X_train, y_train))
-
-
-# lasso regression
-from sklearn.linear_model import Lasso
-lm_l = Lasso()
-lm_l.fit(X_train, y_train)
-np.mean(cross_val_score(lm_l, X_train, y_train))
-
-#Xgboost
-from xgboost import XGBRegressor
-xgb_model = XGBRegressor(random_state= 42)
-
-search_space = {
-    "n_estimators" : [100,200,300],
-    "max_depth" : [3,6,9],
-    "gamma" : [0.01, 0.1],
-    "learning_rate" : [0.001, 0.01, 0.1, 1]
+def pre_process_data(train):
+    # dropping customerID column. Since it is unique to each customer,
+    # it is not useful to train on.
+    train.drop("Customer_ID", axis=1, inplace=True)
+    train.drop("Transaction_ID", axis=1, inplace=True)
+    train.drop("Payment_Mode", axis=1, inplace=True)
     
-    }
-# tune Models on GridSearchCV
-from sklearn.model_selection import GridSearchCV
-#make a GridSearchCV object
-GS = GridSearchCV(estimator = xgb_model, 
-                  param_grid = search_space,
-                  scoring = ["r2", "neg_root_mean_squared_error"],
-                  refit = "r2",
-                  cv =2,
-                  verbose = 4)
-GS.fit(X_train, y_train)
+    categorical_columns=  ['Company', 'City', 'KM_Travelled', 'Price_Charged',
+           'Cost_of_Trip','Gender', 'Age',
+           'Income_(USD/Month)', 'Date', 'Profit_of_Cabs']
+    
+    # converting all the categorical columns to numeric
+    col_mapper = {}
+    class_names_mapper = {}
+    for col in categorical_columns:
+        le = LabelEncoder()
+        le.fit(train.loc[:, col])
+        class_names = le.classes_
+        train.loc[:, col] = le.transform(train.loc[:, col])
+        # saving encoder for each column to be able to inverse-transform later
+        col_mapper.update({col: le})
+        class_names_mapper.update({col: class_names})
+        
+        # handling issue where numeric columns have blank rows
+    train.replace(" ", "0", inplace=True)
 
-GS.best_score_
+
+    return train, col_mapper, class_names
 
 
-# test ensembles
-tpred_lm = lm.predict(X_test)
-tpred_lml = lm_l.predict(X_test)
+# applying pre-process function
+processed_train, col_mapper, class_names_mapper = pre_process_data(train)  
 
 
-from sklearn.metrics import mean_absolute_error
+# splitting into X and Y
+x_train = processed_train.drop("Profit_of_Cabs", axis=1)
+y_train = processed_train.loc[:, "Profit_of_Cabs"]
 
-mean_absolute_error = (y_test,tpred_lm)
-mean_absolute_error = (y_test,tpred_lml)
-                      
+
+# training out-of-the-box Logistic Regression
+model = LogisticRegression()
+model.fit(x_train, y_train)
+
+# getting predictions
+predictions = model.predict(x_train)
+accuracy = accuracy_score(y_train, predictions)
+# checking accuracy of predictions
+print(accuracy)
+
+# pickling mdl
+pickler = open("Cab_prediction_model.pkl", "wb")
+pickle.dump(model, pickler)
+pickler.close()
+
+# pickling le dict
+pickler = open("Cab_prediction_label_encoders.pkl", "wb")
+pickle.dump(col_mapper, pickler)
+pickler.close()
+
+# pickling class names dict
+pickler = open("Cab_prediction_class_names.pkl", "wb")
+pickle.dump(class_names_mapper, pickler)
+pickler.close()
+
